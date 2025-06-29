@@ -1,0 +1,137 @@
+version: '3'
+
+vars:
+  BINARY_NAME: sqlite-mcp
+  BUILD_DIR: build
+  MAIN_PACKAGE: ./cmd/server
+  VERSION:
+    sh: git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0-dev"
+
+tasks:
+  default:
+    desc: Run tests and build the application
+    deps: [test, build]
+
+  build:
+    desc: Build the application
+    cmds:
+      - mkdir -p {{.BUILD_DIR}}
+      - go build -o {{.BUILD_DIR}}/{{.BINARY_NAME}} {{.MAIN_PACKAGE}}
+
+  run:
+    desc: Run the application with example database
+    deps: [build, create-example-db]
+    cmds:
+      - ./{{.BUILD_DIR}}/{{.BINARY_NAME}} -db testdata/example.db
+
+  run-rw:
+    desc: Run the application in read-write mode with example database
+    deps: [build, create-example-db]
+    cmds:
+      - ./{{.BUILD_DIR}}/{{.BINARY_NAME}} -db testdata/example.db -read-write
+
+  lint:
+    desc: Run linting tools
+    cmds:
+      - golangci-lint run ./...
+      - go vet ./...
+
+  lint-fix:
+    desc: Run linting tools, and apply fixes
+    cmds:
+      - golangci-lint run --fix ./...
+
+  test:
+    desc: Run tests
+    cmds:
+      - go test -v ./...
+
+  test-coverage:
+    desc: Run tests with coverage
+    cmds:
+      - go test -v -coverprofile=coverage.out ./...
+      - go tool cover -html=coverage.out -o coverage.html
+
+  clean:
+    desc: Clean the build directory and test artifacts
+    cmds:
+      - rm -rf {{.BUILD_DIR}}
+      - rm -f coverage.out coverage.html
+      - rm -f testdata/example.db
+
+  fmt:
+    desc: Format the code
+    cmds:
+      - go fmt ./...
+      - golangci-lint run --fix
+
+  deps:
+    desc: Update dependencies
+    cmds:
+      - go mod tidy
+
+  install:
+    desc: Install dependencies
+    cmds:
+      - go mod download
+
+  create-example-db:
+    desc: Create example SQLite database for testing
+    cmds:
+      - mkdir -p testdata
+      - |
+        sqlite3 testdata/example.db "
+        CREATE TABLE IF NOT EXISTS users (
+          id INTEGER PRIMARY KEY,
+          name TEXT NOT NULL,
+          email TEXT UNIQUE,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS products (
+          id INTEGER PRIMARY KEY,
+          name TEXT NOT NULL,
+          price REAL NOT NULL,
+          category TEXT,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+        INSERT OR IGNORE INTO users (name, email) VALUES 
+          ('Alice Johnson', 'alice@example.com'),
+          ('Bob Smith', 'bob@example.com'),
+          ('Charlie Brown', 'charlie@example.com');
+        INSERT OR IGNORE INTO products (name, price, category) VALUES
+          ('Laptop', 999.99, 'Electronics'),
+          ('Coffee Mug', 12.99, 'Kitchen'),
+          ('Notebook', 5.99, 'Office');
+        "
+
+  ko-build:
+    desc: Build container image with ko
+    env:
+      VERSION: "{{.VERSION}}"
+      KO_DOCKER_REPO: ghcr.io/stackloklabs/sqlite-mcp
+    cmds:
+      - ko build --local --bare --tags={{.VERSION}},latest ./cmd/server
+
+  ko-run:
+    desc: Run container with ko
+    deps: [create-example-db]
+    cmds:
+      - ko run ./cmd/server -- -db /app/testdata/example.db
+
+  ci:
+    desc: Run CI pipeline (lint, test, build)
+    cmds:
+      - task: deps
+      - task: lint
+      - task: test
+      - task: build
+
+  release:
+    desc: Build release binaries for multiple platforms
+    cmds:
+      - mkdir -p {{.BUILD_DIR}}/release
+      - GOOS=linux GOARCH=amd64 go build -o {{.BUILD_DIR}}/release/{{.BINARY_NAME}}-linux-amd64 {{.MAIN_PACKAGE}}
+      - GOOS=linux GOARCH=arm64 go build -o {{.BUILD_DIR}}/release/{{.BINARY_NAME}}-linux-arm64 {{.MAIN_PACKAGE}}
+      - GOOS=darwin GOARCH=amd64 go build -o {{.BUILD_DIR}}/release/{{.BINARY_NAME}}-darwin-amd64 {{.MAIN_PACKAGE}}
+      - GOOS=darwin GOARCH=arm64 go build -o {{.BUILD_DIR}}/release/{{.BINARY_NAME}}-darwin-arm64 {{.MAIN_PACKAGE}}
+      - GOOS=windows GOARCH=amd64 go build -o {{.BUILD_DIR}}/release/{{.BINARY_NAME}}-windows-amd64.exe {{.MAIN_PACKAGE}}
