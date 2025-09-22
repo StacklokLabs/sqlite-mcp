@@ -5,7 +5,7 @@ go 1.24.3
 require (
 	github.com/mark3labs/mcp-go v0.39.1
 	github.com/stretchr/testify v1.11.1
-	modernc.org/sqlite v1.38.2
+	modernc.org/sqlite v1.39.0
 )
 
 require (
