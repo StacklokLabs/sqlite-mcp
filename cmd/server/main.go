@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 
 	"github.com/mark3labs/mcp-go/server"
@@ -20,6 +21,10 @@ import (
 
 const (
 	defaultDB = "./database.db"
+
+	// Transport types
+	transportSSE            = "sse"
+	transportStreamableHTTP = "streamable-http"
 )
 
 func main() {
@@ -36,7 +41,7 @@ func main() {
 	mcpServer := createMCPServer()
 	registerToolsAndResources(mcpServer, db, config.readWrite)
 
-	runServer(ctx, mcpServer, config.addr, config.dbPath, config.readWrite)
+	runServer(ctx, mcpServer, config.addr, config.dbPath, config.readWrite, config.transport)
 }
 
 // Config holds the parsed command line configuration
@@ -44,6 +49,7 @@ type Config struct {
 	dbPath    string
 	addr      string
 	readWrite bool
+	transport string
 	help      bool
 }
 
@@ -53,6 +59,8 @@ func parseFlags() Config {
 	addr := flag.String("addr", getDefaultAddress(), "Address to listen on")
 	readWrite := flag.Bool("read-write", false,
 		"Whether to allow write operations on the database. When false, the server operates in read-only mode")
+	transport := flag.String("transport", getDefaultTransport(),
+		"Transport protocol: 'sse' or 'streamable-http'. Also via MCP_TRANSPORT env var")
 	help := flag.Bool("help", false, "Show help message")
 
 	flag.Parse()
@@ -61,6 +69,7 @@ func parseFlags() Config {
 		dbPath:    *dbPath,
 		addr:      *addr,
 		readWrite: *readWrite,
+		transport: *transport,
 		help:      *help,
 	}
 }
@@ -72,10 +81,12 @@ func showHelp() {
 	fmt.Printf("Options:\n")
 	flag.PrintDefaults()
 	fmt.Printf("\nEnvironment Variables:\n")
-	fmt.Printf("  MCP_PORT    Port to listen on (overrides -addr flag port)\n")
+	fmt.Printf("  MCP_PORT       Port to listen on (overrides -addr flag port)\n")
+	fmt.Printf("  MCP_TRANSPORT  Transport protocol: 'sse' or 'streamable-http' (default: streamable-http)\n")
 	fmt.Printf("\nExample:\n")
 	fmt.Printf("  %s -db ./mydata.db -addr :8080\n", os.Args[0])
 	fmt.Printf("  MCP_PORT=9000 %s -db ./mydata.db\n", os.Args[0])
+	fmt.Printf("  MCP_TRANSPORT=sse %s -db ./mydata.db\n", os.Args[0])
 }
 
 // setupContext creates a cancellable context with signal handling
@@ -158,14 +169,29 @@ func registerToolsAndResources(mcpServer *server.MCPServer, db *database.DB, rea
 }
 
 // runServer starts the server and handles shutdown
-func runServer(ctx context.Context, mcpServer *server.MCPServer, addr, dbPath string, readWrite bool) {
-	sseServer := server.NewSSEServer(mcpServer)
+func runServer(ctx context.Context, mcpServer *server.MCPServer, addr, dbPath string, readWrite bool, transport string) {
+	// Create the appropriate transport server
+	var transportServer interface {
+		Start(string) error
+		Shutdown(context.Context) error
+	}
+
+	switch strings.ToLower(transport) {
+	case transportStreamableHTTP:
+		log.Println("Using streamable-http transport")
+		transportServer = server.NewStreamableHTTPServer(mcpServer)
+	case transportSSE:
+		log.Println("Using SSE transport")
+		transportServer = server.NewSSEServer(mcpServer)
+	default:
+		log.Fatalf("Invalid transport: %s. Must be 'sse' or 'streamable-http'", transport)
+	}
 
 	// Start server in a goroutine
 	errChan := make(chan error, 1)
 	go func() {
-		logServerStart(addr, dbPath, readWrite)
-		errChan <- sseServer.Start(addr)
+		logServerStart(addr, dbPath, readWrite, transport)
+		errChan <- transportServer.Start(addr)
 	}()
 
 	// Wait for signal or error
@@ -176,19 +202,22 @@ func runServer(ctx context.Context, mcpServer *server.MCPServer, addr, dbPath st
 		}
 	case <-ctx.Done():
 		log.Printf("Shutting down server...")
+		if err := transportServer.Shutdown(ctx); err != nil {
+			log.Printf("Error during shutdown: %v", err)
+		}
 	}
 
 	log.Println("Server shutdown complete")
 }
 
 // logServerStart logs server startup information
-func logServerStart(addr, dbPath string, readWrite bool) {
+func logServerStart(addr, dbPath string, readWrite bool, transport string) {
 	mode := "read-only"
 	if readWrite {
 		mode = "read-write"
 	}
 
-	log.Printf("Starting SQLite MCP Server on %s (%s mode)", addr, mode)
+	log.Printf("Starting SQLite MCP Server on %s (%s mode, %s transport)", addr, mode, transport)
 	log.Printf("Database: %s", dbPath)
 
 	if readWrite {
@@ -216,4 +245,28 @@ func getDefaultAddress() string {
 		}
 	}
 	return ":" + port
+}
+
+// getDefaultTransport returns the transport to use based on MCP_TRANSPORT environment variable.
+// If the environment variable is not set, returns "streamable-http".
+// Valid values are "sse" and "streamable-http".
+func getDefaultTransport() string {
+	defaultTransport := transportStreamableHTTP
+
+	transportEnv := os.Getenv("MCP_TRANSPORT")
+	if transportEnv == "" {
+		return defaultTransport
+	}
+
+	// Normalize the transport value
+	transport := strings.ToLower(strings.TrimSpace(transportEnv))
+
+	// Validate the transport value
+	if transport != transportSSE && transport != transportStreamableHTTP {
+		log.Printf("Invalid MCP_TRANSPORT: %s, using default: %s",
+			transportEnv, defaultTransport)
+		return defaultTransport
+	}
+
+	return transport
 }
