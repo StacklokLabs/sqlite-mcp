@@ -238,10 +238,10 @@ func getDefaultAddress() string {
 			if portNum >= 0 && portNum <= 65535 {
 				port = envPort
 			} else {
-				log.Printf("Invalid MCP_PORT value: %s (must be between 0 and 65535), using default port 8080", envPort)
+				log.Printf("Invalid MCP_PORT value: %s (must be between 0 and 65535), using default port 8080", strconv.Quote(envPort))
 			}
 		} else {
-			log.Printf("Invalid MCP_PORT value: %s (must be a valid number), using default port 8080", envPort)
+			log.Printf("Invalid MCP_PORT value: %s (must be a valid number), using default port 8080", strconv.Quote(envPort))
 		}
 	}
 	return ":" + port
@@ -264,7 +264,7 @@ func getDefaultTransport() string {
 	// Validate the transport value
 	if transport != transportSSE && transport != transportStreamableHTTP {
 		log.Printf("Invalid MCP_TRANSPORT: %s, using default: %s",
-			transportEnv, defaultTransport)
+			strconv.Quote(transportEnv), defaultTransport)
 		return defaultTransport
 	}
 
