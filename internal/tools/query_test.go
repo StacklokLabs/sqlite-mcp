@@ -11,6 +11,17 @@ import (
 	"github.com/StacklokLabs/sqlite-mcp/internal/testutil"
 )
 
+// Tool and argument names used across the tool-call test cases.
+const (
+	toolExecuteQuery     = "execute_query"
+	toolExecuteStatement = "execute_statement"
+	toolDescribeTable    = "describe_table"
+
+	argQuery      = "query"
+	argStatement  = "statement"
+	argParameters = "parameters"
+)
+
 func TestNew(t *testing.T) {
 	db := testutil.CreateTestDB(t)
 	defer db.Close()
@@ -33,10 +44,10 @@ func TestGetTools(t *testing.T) {
 		toolNames[i] = tool.Name
 	}
 
-	assert.Contains(t, toolNames, "execute_query")
-	assert.Contains(t, toolNames, "execute_statement")
+	assert.Contains(t, toolNames, toolExecuteQuery)
+	assert.Contains(t, toolNames, toolExecuteStatement)
 	assert.Contains(t, toolNames, "list_tables")
-	assert.Contains(t, toolNames, "describe_table")
+	assert.Contains(t, toolNames, toolDescribeTable)
 }
 
 func TestHandleExecuteQuery(t *testing.T) {
@@ -49,9 +60,9 @@ func TestHandleExecuteQuery(t *testing.T) {
 	t.Run("successful select query", func(t *testing.T) {
 		request := mcp.CallToolRequest{
 			Params: mcp.CallToolParams{
-				Name: "execute_query",
+				Name: toolExecuteQuery,
 				Arguments: map[string]interface{}{
-					"query": "SELECT * FROM users ORDER BY id",
+					argQuery: "SELECT * FROM users ORDER BY id",
 				},
 			},
 		}
@@ -68,10 +79,10 @@ func TestHandleExecuteQuery(t *testing.T) {
 	t.Run("query with parameters", func(t *testing.T) {
 		request := mcp.CallToolRequest{
 			Params: mcp.CallToolParams{
-				Name: "execute_query",
+				Name: toolExecuteQuery,
 				Arguments: map[string]interface{}{
-					"query":      "SELECT * FROM users WHERE age > ?",
-					"parameters": []interface{}{"27"},
+					argQuery:      "SELECT * FROM users WHERE age > ?",
+					argParameters: []interface{}{"27"},
 				},
 			},
 		}
@@ -88,9 +99,9 @@ func TestHandleExecuteQuery(t *testing.T) {
 	t.Run("non-select query rejected", func(t *testing.T) {
 		request := mcp.CallToolRequest{
 			Params: mcp.CallToolParams{
-				Name: "execute_query",
+				Name: toolExecuteQuery,
 				Arguments: map[string]interface{}{
-					"query": "INSERT INTO users (name, email, age) VALUES ('Charlie', 'charlie@example.com', 35)",
+					argQuery: "INSERT INTO users (name, email, age) VALUES ('Charlie', 'charlie@example.com', 35)",
 				},
 			},
 		}
@@ -105,7 +116,7 @@ func TestHandleExecuteQuery(t *testing.T) {
 	t.Run("missing query parameter", func(t *testing.T) {
 		request := mcp.CallToolRequest{
 			Params: mcp.CallToolParams{
-				Name:      "execute_query",
+				Name:      toolExecuteQuery,
 				Arguments: map[string]interface{}{},
 			},
 		}
@@ -128,10 +139,10 @@ func TestHandleExecuteStatement(t *testing.T) {
 	t.Run("successful insert", func(t *testing.T) {
 		request := mcp.CallToolRequest{
 			Params: mcp.CallToolParams{
-				Name: "execute_statement",
+				Name: toolExecuteStatement,
 				Arguments: map[string]interface{}{
-					"statement":  "INSERT INTO users (name, email, age) VALUES (?, ?, ?)",
-					"parameters": []interface{}{"Charlie", "charlie@example.com", "35"},
+					argStatement:  "INSERT INTO users (name, email, age) VALUES (?, ?, ?)",
+					argParameters: []interface{}{"Charlie", "charlie@example.com", "35"},
 				},
 			},
 		}
@@ -147,10 +158,10 @@ func TestHandleExecuteStatement(t *testing.T) {
 	t.Run("successful update", func(t *testing.T) {
 		request := mcp.CallToolRequest{
 			Params: mcp.CallToolParams{
-				Name: "execute_statement",
+				Name: toolExecuteStatement,
 				Arguments: map[string]interface{}{
-					"statement":  "UPDATE users SET age = ? WHERE name = ?",
-					"parameters": []interface{}{"31", "Alice"},
+					argStatement:  "UPDATE users SET age = ? WHERE name = ?",
+					argParameters: []interface{}{"31", "Alice"},
 				},
 			},
 		}
@@ -166,9 +177,9 @@ func TestHandleExecuteStatement(t *testing.T) {
 	t.Run("select query rejected", func(t *testing.T) {
 		request := mcp.CallToolRequest{
 			Params: mcp.CallToolParams{
-				Name: "execute_statement",
+				Name: toolExecuteStatement,
 				Arguments: map[string]interface{}{
-					"statement": "SELECT * FROM users",
+					argStatement: "SELECT * FROM users",
 				},
 			},
 		}
@@ -214,7 +225,7 @@ func TestHandleDescribeTable(t *testing.T) {
 	t.Run("existing table", func(t *testing.T) {
 		request := mcp.CallToolRequest{
 			Params: mcp.CallToolParams{
-				Name: "describe_table",
+				Name: toolDescribeTable,
 				Arguments: map[string]interface{}{
 					"table_name": "users",
 				},
@@ -235,7 +246,7 @@ func TestHandleDescribeTable(t *testing.T) {
 	t.Run("non-existent table", func(t *testing.T) {
 		request := mcp.CallToolRequest{
 			Params: mcp.CallToolParams{
-				Name: "describe_table",
+				Name: toolDescribeTable,
 				Arguments: map[string]interface{}{
 					"table_name": "non_existent",
 				},
@@ -252,7 +263,7 @@ func TestHandleDescribeTable(t *testing.T) {
 	t.Run("missing table name", func(t *testing.T) {
 		request := mcp.CallToolRequest{
 			Params: mcp.CallToolParams{
-				Name:      "describe_table",
+				Name:      toolDescribeTable,
 				Arguments: map[string]interface{}{},
 			},
 		}
