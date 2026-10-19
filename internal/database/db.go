@@ -72,20 +72,9 @@ func New(dbPath string, readOnly bool) (*DB, error) {
 		return nil, fmt.Errorf("failed to ping database: %w", err)
 	}
 
-	// Block ATTACH DATABASE at the engine level. The server never needs it,
-	// and disabling it stops a crafted statement from opening another file,
-	// which is the core of the read-only bypass and the cross-database read in
-	// GHSA-q433-mp6c-8v4f, independently of any SQL-text checks. The
-	// attached-databases limit is bound to a single connection, so the pool is
-	// pinned to one connection and the limit is set on it. Pinning to one
-	// connection is also what an in-memory database requires to stay coherent.
+	// Pinning to one connection is what an in-memory database requires to stay
+	// coherent.
 	conn.SetMaxOpenConns(1)
-	if err := disableAttach(conn); err != nil {
-		if cerr := conn.Close(); cerr != nil {
-			return nil, fmt.Errorf("%w (and failed to close: %v)", err, cerr)
-		}
-		return nil, err
-	}
 
 	return &DB{
 		conn: conn,
@@ -93,12 +82,19 @@ func New(dbPath string, readOnly bool) (*DB, error) {
 	}, nil
 }
 
-// disableAttach sets SQLITE_LIMIT_ATTACHED to zero on the pool's connection so
-// the engine refuses ATTACH DATABASE. The caller must have pinned the pool to a
-// single connection, since the limit applies only to the connection it is set
-// on.
-func disableAttach(conn *sql.DB) error {
-	c, err := conn.Conn(context.Background())
+// withConn runs fn on a pooled connection that has ATTACH DATABASE disabled.
+//
+// Blocking ATTACH at the engine level stops a crafted statement from opening
+// another file, which is the core of the read-only bypass and the
+// cross-database read in GHSA-q433-mp6c-8v4f, independently of any SQL-text
+// checks. The server never needs ATTACH. SQLITE_LIMIT_ATTACHED is bound to a
+// single connection and the pool can replace a connection at any time (the
+// driver discards one after an interrupted query), so the limit is applied to
+// the connection that runs each statement rather than once at open. Setting it
+// is a single C call and idempotent.
+func (db *DB) withConn(fn func(*sql.Conn) error) error {
+	ctx := context.Background()
+	c, err := db.conn.Conn(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to acquire connection: %w", err)
 	}
@@ -107,7 +103,7 @@ func disableAttach(conn *sql.DB) error {
 	if _, err := sqlite.Limit(c, sqliteLimitAttached, 0); err != nil {
 		return fmt.Errorf("failed to disable ATTACH: %w", err)
 	}
-	return nil
+	return fn(c)
 }
 
 // Close closes the database connection
@@ -120,7 +116,17 @@ func (db *DB) Close() error {
 
 // Query executes a SELECT query and returns the results
 func (db *DB) Query(query string, args ...interface{}) ([]map[string]interface{}, error) {
-	rows, err := db.conn.Query(query, args...)
+	var results []map[string]interface{}
+	err := db.withConn(func(c *sql.Conn) error {
+		var err error
+		results, err = queryRows(c, query, args...)
+		return err
+	})
+	return results, err
+}
+
+func queryRows(c *sql.Conn, query string, args ...interface{}) ([]map[string]interface{}, error) {
+	rows, err := c.QueryContext(context.Background(), query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query failed: %w", err)
 	}
@@ -164,17 +170,19 @@ func (db *DB) Query(query string, args ...interface{}) ([]map[string]interface{}
 
 // Execute runs an INSERT, UPDATE, or DELETE statement
 func (db *DB) Execute(statement string, args ...interface{}) (int64, error) {
-	result, err := db.conn.Exec(statement, args...)
-	if err != nil {
-		return 0, fmt.Errorf("execution failed: %w", err)
-	}
-
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return 0, fmt.Errorf("failed to get rows affected: %w", err)
-	}
-
-	return rowsAffected, nil
+	var rowsAffected int64
+	err := db.withConn(func(c *sql.Conn) error {
+		result, err := c.ExecContext(context.Background(), statement, args...)
+		if err != nil {
+			return fmt.Errorf("execution failed: %w", err)
+		}
+		rowsAffected, err = result.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("failed to get rows affected: %w", err)
+		}
+		return nil
+	})
+	return rowsAffected, err
 }
 
 // GetTables returns a list of all tables in the database
