@@ -22,47 +22,77 @@ import (
 // trailing whitespace or comments, are allowed.
 func hasMultipleStatements(sql string) bool {
 	runes := []rune(sql)
-	n := len(runes)
 	sawSeparator := false
-	for i := 0; i < n; i++ {
+	for i := 0; i < len(runes); i++ {
+		if end, ok := skipToken(runes, i); ok {
+			i = end
+			continue
+		}
 		switch c := runes[i]; {
-		case c == '-' && i+1 < n && runes[i+1] == '-':
-			for i < n && runes[i] != '\n' {
-				i++
-			}
-		case c == '/' && i+1 < n && runes[i+1] == '*':
-			i += 2
-			for i+1 < n && !(runes[i] == '*' && runes[i+1] == '/') {
-				i++
-			}
-			i++ // skip the closing '/'
-		case c == '\'' || c == '"' || c == '`':
-			i++
-			for i < n {
-				if runes[i] == c {
-					if i+1 < n && runes[i+1] == c { // doubled-quote escape
-						i += 2
-						continue
-					}
-					break
-				}
-				i++
-			}
-		case c == '[': // SQLite bracket-quoted identifier
-			for i < n && runes[i] != ']' {
-				i++
-			}
 		case c == ';':
 			sawSeparator = true
-		default:
+		case sawSeparator && !unicode.IsSpace(c):
 			// Any real content after a statement separator means there is a
 			// second statement.
-			if sawSeparator && !unicode.IsSpace(c) {
-				return true
-			}
+			return true
 		}
 	}
 	return false
+}
+
+// skipToken reports whether a comment, string literal or quoted identifier
+// starts at runes[i], and if so returns the index of its last rune (or
+// len(runes) when it is unterminated). Semicolons inside these tokens are not
+// statement separators.
+func skipToken(runes []rune, i int) (int, bool) {
+	n := len(runes)
+	switch c := runes[i]; {
+	case c == '-' && i+1 < n && runes[i+1] == '-':
+		return skipUntil(runes, i, '\n'), true
+	case c == '/' && i+1 < n && runes[i+1] == '*':
+		return skipBlockComment(runes, i), true
+	case c == '\'' || c == '"' || c == '`':
+		return skipQuoted(runes, i), true
+	case c == '[': // SQLite bracket-quoted identifier
+		return skipUntil(runes, i, ']'), true
+	}
+	return i, false
+}
+
+// skipUntil returns the index of the first end rune at or after i, or
+// len(runes) if there is none.
+func skipUntil(runes []rune, i int, end rune) int {
+	for i < len(runes) && runes[i] != end {
+		i++
+	}
+	return i
+}
+
+// skipBlockComment returns the index of the closing '/' of the block comment
+// opening at runes[i].
+func skipBlockComment(runes []rune, i int) int {
+	i += 2
+	for i+1 < len(runes) && (runes[i] != '*' || runes[i+1] != '/') {
+		i++
+	}
+	return i + 1
+}
+
+// skipQuoted returns the index of the closing quote of the literal or
+// identifier opening at runes[i], treating a doubled quote as an escape.
+func skipQuoted(runes []rune, i int) int {
+	q := runes[i]
+	for i++; i < len(runes); i++ {
+		if runes[i] != q {
+			continue
+		}
+		if i+1 < len(runes) && runes[i+1] == q {
+			i++
+			continue
+		}
+		break
+	}
+	return i
 }
 
 // QueryTools provides MCP tools for SQLite database operations

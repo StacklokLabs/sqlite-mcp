@@ -91,7 +91,7 @@ func TestReadOnlyMode_DescribeTableRejectsInjection(t *testing.T) {
 	injection := "x); ATTACH '" + proof + "' AS q; CREATE TABLE q.t(x); --"
 	req := mcp.CallToolRequest{Params: mcp.CallToolParams{
 		Name:      toolDescribeTable,
-		Arguments: map[string]interface{}{"table_name": injection},
+		Arguments: map[string]interface{}{argTableName: injection},
 	}}
 	result, err := qt.HandleTool(ctx, req)
 	require.NoError(t, err)
@@ -103,7 +103,7 @@ func TestReadOnlyMode_DescribeTableRejectsInjection(t *testing.T) {
 	// A legitimate table name still returns its schema.
 	ok := mcp.CallToolRequest{Params: mcp.CallToolParams{
 		Name:      toolDescribeTable,
-		Arguments: map[string]interface{}{"table_name": "users"},
+		Arguments: map[string]interface{}{argTableName: "users"},
 	}}
 	okResult, err := qt.HandleTool(ctx, ok)
 	require.NoError(t, err)

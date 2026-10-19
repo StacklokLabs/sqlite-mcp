@@ -20,6 +20,7 @@ const (
 	argQuery      = "query"
 	argStatement  = "statement"
 	argParameters = "parameters"
+	argTableName  = "table_name"
 )
 
 func TestNew(t *testing.T) {
@@ -227,7 +228,7 @@ func TestHandleDescribeTable(t *testing.T) {
 			Params: mcp.CallToolParams{
 				Name: toolDescribeTable,
 				Arguments: map[string]interface{}{
-					"table_name": "users",
+					argTableName: "users",
 				},
 			},
 		}
@@ -248,7 +249,7 @@ func TestHandleDescribeTable(t *testing.T) {
 			Params: mcp.CallToolParams{
 				Name: toolDescribeTable,
 				Arguments: map[string]interface{}{
-					"table_name": "non_existent",
+					argTableName: "non_existent",
 				},
 			},
 		}
