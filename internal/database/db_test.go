@@ -1,11 +1,13 @@
 package database
 
 import (
+	"database/sql"
 	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	_ "modernc.org/sqlite"
 )
 
 func createTestDB(t *testing.T) string {
@@ -13,13 +15,14 @@ func createTestDB(t *testing.T) string {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
 
-	// Create a test database with sample data
-	db, err := New(InMemoryDB, false)
+	// Build the fixture directly as a file. (This previously created the data
+	// in an in-memory database and used ATTACH to copy it to disk, which the
+	// connection now forbids.)
+	conn, err := sql.Open("sqlite", dbPath)
 	require.NoError(t, err)
-	defer db.Close()
+	defer conn.Close()
 
-	// Create test table and insert sample data
-	_, err = db.Execute(`
+	_, err = conn.Exec(`
 		CREATE TABLE users (
 			id INTEGER PRIMARY KEY,
 			name TEXT NOT NULL,
@@ -29,18 +32,11 @@ func createTestDB(t *testing.T) string {
 	`)
 	require.NoError(t, err)
 
-	_, err = db.Execute(`
-		INSERT INTO users (name, email, age) VALUES 
+	_, err = conn.Exec(`
+		INSERT INTO users (name, email, age) VALUES
 		('Alice', 'alice@example.com', 30),
 		('Bob', 'bob@example.com', 25)
 	`)
-	require.NoError(t, err)
-
-	// Save to file
-	_, err = db.Execute("ATTACH DATABASE ? AS disk", dbPath)
-	require.NoError(t, err)
-
-	_, err = db.Execute("CREATE TABLE disk.users AS SELECT * FROM users")
 	require.NoError(t, err)
 
 	return dbPath
@@ -153,5 +149,5 @@ func TestGetTableSchema(t *testing.T) {
 	// Check first column (id)
 	assert.Equal(t, "id", schema[0]["name"])
 	assert.Contains(t, []string{"INTEGER", "INT"}, schema[0]["type"]) // SQLite may return either
-	assert.Equal(t, int64(0), schema[0]["pk"])                        // Primary key flag
+	assert.Equal(t, int64(1), schema[0]["pk"])                        // id is the primary key
 }

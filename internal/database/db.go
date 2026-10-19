@@ -2,12 +2,18 @@
 package database
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"os"
 
-	_ "modernc.org/sqlite" // Pure Go SQLite driver
+	sqlite "modernc.org/sqlite" // Pure Go SQLite driver
 )
+
+// sqliteLimitAttached is SQLITE_LIMIT_ATTACHED, the run-time limit on the
+// number of attached databases. Setting it to zero makes the engine refuse
+// ATTACH. See https://www.sqlite.org/c3ref/c_limit_attached.html.
+const sqliteLimitAttached = 7
 
 const (
 	// InMemoryDB represents the SQLite in-memory database identifier
@@ -40,6 +46,10 @@ func New(dbPath string, readOnly bool) (*DB, error) {
 		// Add query parameters based on mode
 		if readOnly {
 			dsn += "?mode=ro"
+			// Defense in depth: query_only blocks every write on the
+			// connection, including writes to databases reached via ATTACH,
+			// which mode=ro alone does not prevent.
+			dsn += "&_pragma=query_only(1)"
 		} else {
 			dsn += "?mode=rwc"
 		}
@@ -62,10 +72,42 @@ func New(dbPath string, readOnly bool) (*DB, error) {
 		return nil, fmt.Errorf("failed to ping database: %w", err)
 	}
 
+	// Block ATTACH DATABASE at the engine level. The server never needs it,
+	// and disabling it stops a crafted statement from opening another file,
+	// which is the core of the read-only bypass and the cross-database read in
+	// GHSA-q433-mp6c-8v4f, independently of any SQL-text checks. The
+	// attached-databases limit is bound to a single connection, so the pool is
+	// pinned to one connection and the limit is set on it. Pinning to one
+	// connection is also what an in-memory database requires to stay coherent.
+	conn.SetMaxOpenConns(1)
+	if err := disableAttach(conn); err != nil {
+		if cerr := conn.Close(); cerr != nil {
+			return nil, fmt.Errorf("%w (and failed to close: %v)", err, cerr)
+		}
+		return nil, err
+	}
+
 	return &DB{
 		conn: conn,
 		path: dbPath,
 	}, nil
+}
+
+// disableAttach sets SQLITE_LIMIT_ATTACHED to zero on the pool's connection so
+// the engine refuses ATTACH DATABASE. The caller must have pinned the pool to a
+// single connection, since the limit applies only to the connection it is set
+// on.
+func disableAttach(conn *sql.DB) error {
+	c, err := conn.Conn(context.Background())
+	if err != nil {
+		return fmt.Errorf("failed to acquire connection: %w", err)
+	}
+	defer func() { _ = c.Close() }()
+
+	if _, err := sqlite.Limit(c, sqliteLimitAttached, 0); err != nil {
+		return fmt.Errorf("failed to disable ATTACH: %w", err)
+	}
+	return nil
 }
 
 // Close closes the database connection
@@ -153,10 +195,13 @@ func (db *DB) GetTables() ([]string, error) {
 	return tables, nil
 }
 
-// GetTableSchema returns the schema information for a specific table
+// GetTableSchema returns the schema information for a specific table.
+//
+// The table name is passed as a bound parameter to the pragma_table_info
+// table-valued function rather than interpolated into the SQL text, so a
+// crafted table name cannot break out of the query (CWE-89).
 func (db *DB) GetTableSchema(tableName string) ([]map[string]interface{}, error) {
-	query := fmt.Sprintf("PRAGMA table_info(%s)", tableName)
-	return db.Query(query)
+	return db.Query("SELECT * FROM pragma_table_info(?)", tableName)
 }
 
 // Path returns the database file path

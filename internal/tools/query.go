@@ -6,11 +6,64 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"unicode"
 
 	"github.com/mark3labs/mcp-go/mcp"
 
 	"github.com/StacklokLabs/sqlite-mcp/internal/database"
 )
+
+// hasMultipleStatements reports whether sql contains more than one SQL
+// statement. The underlying driver executes every ;-separated statement in a
+// single call, so a lone prefix check (e.g. "starts with SELECT") lets an
+// attacker chain further statements such as ATTACH after a harmless SELECT.
+// Semicolons inside string literals, quoted identifiers and comments are not
+// statement separators, so they are skipped. A single trailing semicolon, and
+// trailing whitespace or comments, are allowed.
+func hasMultipleStatements(sql string) bool {
+	runes := []rune(sql)
+	n := len(runes)
+	sawSeparator := false
+	for i := 0; i < n; i++ {
+		switch c := runes[i]; {
+		case c == '-' && i+1 < n && runes[i+1] == '-':
+			for i < n && runes[i] != '\n' {
+				i++
+			}
+		case c == '/' && i+1 < n && runes[i+1] == '*':
+			i += 2
+			for i+1 < n && !(runes[i] == '*' && runes[i+1] == '/') {
+				i++
+			}
+			i++ // skip the closing '/'
+		case c == '\'' || c == '"' || c == '`':
+			i++
+			for i < n {
+				if runes[i] == c {
+					if i+1 < n && runes[i+1] == c { // doubled-quote escape
+						i += 2
+						continue
+					}
+					break
+				}
+				i++
+			}
+		case c == '[': // SQLite bracket-quoted identifier
+			for i < n && runes[i] != ']' {
+				i++
+			}
+		case c == ';':
+			sawSeparator = true
+		default:
+			// Any real content after a statement separator means there is a
+			// second statement.
+			if sawSeparator && !unicode.IsSpace(c) {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 // QueryTools provides MCP tools for SQLite database operations
 type QueryTools struct {
@@ -100,6 +153,13 @@ func (qt *QueryTools) handleExecuteQuery(_ context.Context, request mcp.CallTool
 		return mcp.NewToolResultError("only SELECT queries are allowed with execute_query"), nil
 	}
 
+	// Reject statement chaining. Without this, a payload like
+	// "SELECT 1; ATTACH ..." passes the SELECT prefix check and the driver
+	// still runs the trailing statements, defeating read-only mode.
+	if hasMultipleStatements(query) {
+		return mcp.NewToolResultError("only a single SQL statement is allowed with execute_query"), nil
+	}
+
 	// Parse parameters
 	var params []interface{}
 	if paramArray := mcp.ParseArgument(request, "parameters", nil); paramArray != nil {
@@ -133,6 +193,13 @@ func (qt *QueryTools) handleExecuteStatement(_ context.Context, request mcp.Call
 	trimmedStatement := strings.TrimSpace(strings.ToUpper(statement))
 	if strings.HasPrefix(trimmedStatement, "SELECT") {
 		return mcp.NewToolResultError("SELECT queries should use execute_query tool"), nil
+	}
+
+	// Reject statement chaining here too, so a single write tool call cannot
+	// smuggle extra statements (e.g. ATTACH to reach files outside the
+	// configured database).
+	if hasMultipleStatements(statement) {
+		return mcp.NewToolResultError("only a single SQL statement is allowed with execute_statement"), nil
 	}
 
 	// Parse parameters
