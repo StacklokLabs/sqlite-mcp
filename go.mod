@@ -3,7 +3,7 @@ module github.com/StacklokLabs/sqlite-mcp
 go 1.27
 
 require (
-	github.com/mark3labs/mcp-go v1.3.0
+	github.com/mark3labs/mcp-go v1.5.0
 	github.com/stretchr/testify v1.12.1
 	modernc.org/sqlite v1.60.1
 )
